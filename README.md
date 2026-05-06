@@ -257,4 +257,8 @@ MIT
 
 ---
 
+## Screenshots
+<img width="2452" height="1429" alt="image" src="https://github.com/user-attachments/assets/22e85b34-2066-4dbf-ac5f-c8148ebc8538" />
+
+
 **Built with ❤️ using React, .NET 9, and Azure OpenAI GPT-image-1**
