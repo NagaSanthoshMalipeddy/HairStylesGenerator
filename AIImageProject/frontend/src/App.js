@@ -9,7 +9,18 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [dragOver, setDragOver] = useState(false);
+  const [style, setStyle] = useState("default");
   const fileInputRef = useRef(null);
+
+  const STYLE_PRESETS = [
+    { id: "default",   label: "Original",   emoji: "✂️",  desc: "Classic analysis" },
+    { id: "anime",     label: "Anime",      emoji: "🏌",  desc: "Japanese anime style" },
+    { id: "pixar",     label: "Pixar",      emoji: "🎬",  desc: "3D animated look" },
+    { id: "linkedin",  label: "LinkedIn",   emoji: "💼",  desc: "Professional headshot" },
+    { id: "cyberpunk", label: "Cyberpunk",  emoji: "🌃",  desc: "Futuristic neon" },
+    { id: "watercolor",label: "Watercolor", emoji: "🎨",  desc: "Artistic painting" },
+    { id: "retro",     label: "Retro",      emoji: "📼",  desc: "80s vintage vibe" },
+  ];
 
   const handleFile = useCallback((file) => {
     if (!file || !file.type.startsWith("image/")) return;
@@ -43,6 +54,7 @@ function App() {
 
     const formData = new FormData();
     formData.append("image", image);
+    formData.append("style", style);
 
     try {
       const response = await axios.post(
@@ -67,6 +79,7 @@ function App() {
     setPreview(null);
     setResult("");
     setError("");
+    setStyle("default");
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
@@ -140,28 +153,48 @@ function App() {
             </div>
 
             {image && (
-              <div className="actions">
-                <button
-                  className="btn btn-primary"
-                  onClick={generateImage}
-                  disabled={loading}
-                >
-                  {loading ? (
-                    <>
-                      <span className="spinner" />
-                      <span>Analyzing...</span>
-                    </>
-                  ) : (
-                    <>
-                      <span className="btn-icon">&#10024;</span>
-                      <span>Analyze Hairstyles</span>
-                    </>
-                  )}
-                </button>
-                <button className="btn btn-ghost" onClick={reset}>
-                  Clear
-                </button>
-              </div>
+              <>
+                <div className="style-presets">
+                  <p className="style-presets-title">Choose a Style</p>
+                  <div className="style-grid">
+                    {STYLE_PRESETS.map((preset) => (
+                      <button
+                        key={preset.id}
+                        className={`style-btn ${style === preset.id ? "style-active" : ""}`}
+                        onClick={() => setStyle(preset.id)}
+                        disabled={loading}
+                      >
+                        <span className="style-emoji">{preset.emoji}</span>
+                        <span className="style-label">{preset.label}</span>
+                        <span className="style-desc">{preset.desc}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="actions">
+                  <button
+                    className="btn btn-primary"
+                    onClick={generateImage}
+                    disabled={loading}
+                  >
+                    {loading ? (
+                      <>
+                        <span className="spinner" />
+                        <span>Analyzing...</span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="btn-icon">&#10024;</span>
+                        <span>Analyze as {STYLE_PRESETS.find(p => p.id === style)?.label}</span>
+                      </>
+                    )}
+                  </button>
+                  <button className="btn btn-ghost" onClick={reset}>
+                    Clear
+                  </button>
+                </div>
+              </>
             )}
 
             {error && (
