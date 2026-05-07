@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from "react";
+import React, { useState, useRef, useCallback, useEffect } from "react";
 import axios from "axios";
 import "./App.css";
 
@@ -10,7 +10,13 @@ function App() {
   const [error, setError] = useState("");
   const [dragOver, setDragOver] = useState(false);
   const [style, setStyle] = useState("default");
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [cameraError, setCameraError] = useState("");
+  const [facingMode, setFacingMode] = useState("user"); // 'user' = front, 'environment' = back
   const fileInputRef = useRef(null);
+  const videoRef = useRef(null);
+  const streamRef = useRef(null);
+  const canvasRef = useRef(null);
 
   const STYLE_PRESETS = [
     { id: "default",   label: "Original",   emoji: "✂️",  desc: "Classic analysis" },
@@ -46,6 +52,94 @@ function App() {
     setDragOver(false);
   }, []);
 
+  // ----- Camera capture -----
+  const stopCamera = useCallback(() => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+  }, []);
+
+  const startCamera = useCallback(async (mode = facingMode) => {
+    setCameraError("");
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setCameraError("Camera is not supported in this browser.");
+      return;
+    }
+    stopCamera();
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: mode, width: { ideal: 1280 }, height: { ideal: 1280 } },
+        audio: false,
+      });
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+      }
+    } catch (err) {
+      setCameraError(
+        err.name === "NotAllowedError"
+          ? "Camera permission was denied. Please allow camera access and try again."
+          : err.message || "Unable to access the camera."
+      );
+    }
+  }, [facingMode, stopCamera]);
+
+  const openCamera = useCallback(async () => {
+    setCameraOpen(true);
+    await startCamera(facingMode);
+  }, [facingMode, startCamera]);
+
+  const closeCamera = useCallback(() => {
+    stopCamera();
+    setCameraOpen(false);
+    setCameraError("");
+  }, [stopCamera]);
+
+  const flipCamera = useCallback(async () => {
+    const next = facingMode === "user" ? "environment" : "user";
+    setFacingMode(next);
+    await startCamera(next);
+  }, [facingMode, startCamera]);
+
+  const capturePhoto = useCallback(() => {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    if (!video || !canvas || !video.videoWidth) return;
+
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext("2d");
+    // Mirror front-camera capture so the saved image matches what the user sees
+    if (facingMode === "user") {
+      ctx.translate(canvas.width, 0);
+      ctx.scale(-1, 1);
+    }
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    canvas.toBlob(
+      (blob) => {
+        if (!blob) return;
+        const file = new File([blob], `capture-${Date.now()}.jpg`, { type: "image/jpeg" });
+        setImage(file);
+        setPreview(URL.createObjectURL(file));
+        setResult("");
+        setError("");
+        closeCamera();
+      },
+      "image/jpeg",
+      0.95
+    );
+  }, [facingMode, closeCamera]);
+
+  // Cleanup camera stream on unmount
+  useEffect(() => {
+    return () => stopCamera();
+  }, [stopCamera]);
+
   const generateImage = async () => {
     if (!image) return;
     setLoading(true);
@@ -57,8 +151,11 @@ function App() {
     formData.append("style", style);
 
     try {
+      const apiBase =
+        process.env.REACT_APP_API_BASE ||
+        "https://hairstylesgenerator-htdzbqfycafwfpey.canadacentral-01.azurewebsites.net";
       const response = await axios.post(
-        "http://localhost:5187/api/image/generate",
+        `${apiBase}/api/image/generate`,
         formData
       );
       const imageData = response.data.data[0];
@@ -150,6 +247,19 @@ function App() {
                   <span className="drop-formats">PNG, JPG, JPEG, WebP</span>
                 </div>
               )}
+            </div>
+
+            <div className="capture-actions">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={openCamera}
+                disabled={loading}
+              >
+                <span className="btn-icon" aria-hidden="true">&#128247;</span>
+                <span>Take Photo</span>
+              </button>
+              <span className="capture-or">or upload above</span>
             </div>
 
             {image && (
@@ -297,6 +407,66 @@ function App() {
       <footer className="footer">
         <p>Powered by Azure OpenAI &middot; GPT-image-1</p>
       </footer>
+
+      {cameraOpen && (
+        <div className="camera-modal" role="dialog" aria-modal="true" aria-label="Camera">
+          <div className="camera-modal-inner">
+            <button className="camera-close" onClick={closeCamera} aria-label="Close camera">
+              &times;
+            </button>
+            <h3 className="camera-title">Take a Photo</h3>
+
+            {cameraError ? (
+              <div className="camera-error">
+                <span className="error-icon">&#9888;</span>
+                <p>{cameraError}</p>
+                <button className="btn btn-secondary" onClick={() => startCamera(facingMode)}>
+                  Retry
+                </button>
+              </div>
+            ) : (
+              <>
+                <div className="camera-stage">
+                  <video
+                    ref={videoRef}
+                    autoPlay
+                    playsInline
+                    muted
+                    className={`camera-video ${facingMode === "user" ? "mirror" : ""}`}
+                  />
+                </div>
+                <div className="camera-controls">
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={flipCamera}
+                    aria-label="Switch camera"
+                  >
+                    <span className="btn-icon">&#128260;</span>
+                    <span>Flip</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={capturePhoto}
+                  >
+                    <span className="btn-icon">&#128247;</span>
+                    <span>Capture</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={closeCamera}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+          <canvas ref={canvasRef} style={{ display: "none" }} />
+        </div>
+      )}
     </div>
   );
 }

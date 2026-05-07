@@ -1,3 +1,4 @@
+using Microsoft.ApplicationInsights;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Backend.Controllers;
@@ -29,10 +30,20 @@ public class ImageController : ControllerBase
     };
 
     private readonly IConfiguration _config;
+    private readonly IHttpClientFactory _httpClientFactory;
+    private readonly TelemetryClient _telemetry;
+    private readonly ILogger<ImageController> _logger;
 
-    public ImageController(IConfiguration config)
+    public ImageController(
+        IConfiguration config,
+        IHttpClientFactory httpClientFactory,
+        TelemetryClient telemetry,
+        ILogger<ImageController> logger)
     {
         _config = config;
+        _httpClientFactory = httpClientFactory;
+        _telemetry = telemetry;
+        _logger = logger;
     }
 
     [HttpPost("generate")]
@@ -49,6 +60,14 @@ public class ImageController : ControllerBase
         var apiKey = _config["AzureOpenAI:ApiKey"];
         var deployment = _config["AzureOpenAI:Deployment"];
 
+        if (string.IsNullOrWhiteSpace(endpoint) ||
+            string.IsNullOrWhiteSpace(apiKey) ||
+            string.IsNullOrWhiteSpace(deployment))
+        {
+            _logger.LogError("Azure OpenAI configuration is missing.");
+            return StatusCode(500, "Azure OpenAI configuration is missing on the server.");
+        }
+
         // Build prompt with style suffix
         var styleSuffix = "";
         if (!string.IsNullOrEmpty(style) && StylePrompts.ContainsKey(style))
@@ -56,7 +75,9 @@ public class ImageController : ControllerBase
 
         var prompt = BasePrompt + styleSuffix;
 
-        using var client = new HttpClient();
+        // Use the named client configured in Program.cs with a 4-minute timeout
+        // (default HttpClient.Timeout of 100s is too short for image generation).
+        var client = _httpClientFactory.CreateClient("AzureOpenAI");
         client.DefaultRequestHeaders.Add("Authorization", $"Bearer {apiKey}");
 
         var content = new MultipartFormDataContent();
@@ -78,12 +99,75 @@ public class ImageController : ControllerBase
         var url =
             $"{endpoint}openai/deployments/{deployment}/images/edits?api-version=2025-04-01-preview";
 
-        var response = await client.PostAsync(url, content);
-        var result = await response.Content.ReadAsStringAsync();
+        // Track the Azure OpenAI call as a custom App Insights dependency for end-to-end visibility.
+        var startTime = DateTimeOffset.UtcNow;
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var success = false;
+        int statusCode = 0;
 
-        if (!response.IsSuccessStatusCode)
-            return StatusCode((int)response.StatusCode, result);
+        try
+        {
+            var response = await client.PostAsync(url, content, HttpContext.RequestAborted);
+            statusCode = (int)response.StatusCode;
+            success = response.IsSuccessStatusCode;
+            var result = await response.Content.ReadAsStringAsync(HttpContext.RequestAborted);
 
-        return Content(result, "application/json");
+            if (!success)
+            {
+                _logger.LogWarning(
+                    "Azure OpenAI returned {StatusCode} for style '{Style}'.",
+                    statusCode, style ?? "default");
+                return StatusCode(statusCode, result);
+            }
+
+            // Track style usage as a custom event so you can chart popular styles in App Insights.
+            _telemetry.TrackEvent("HairstyleGenerated", new Dictionary<string, string>
+            {
+                ["style"] = style ?? "default",
+                ["deployment"] = deployment
+            });
+
+            return Content(result, "application/json");
+        }
+        catch (TaskCanceledException ex) when (!HttpContext.RequestAborted.IsCancellationRequested)
+        {
+            // HttpClient timed out (vs. the caller actually disconnecting).
+            statusCode = StatusCodes.Status504GatewayTimeout;
+            _logger.LogWarning(ex,
+                "Azure OpenAI image generation timed out after {Elapsed}s for style '{Style}'.",
+                stopwatch.Elapsed.TotalSeconds, style ?? "default");
+            _telemetry.TrackException(ex, new Dictionary<string, string>
+            {
+                ["style"] = style ?? "default",
+                ["deployment"] = deployment,
+                ["reason"] = "HttpClientTimeout"
+            });
+            return StatusCode(statusCode, new
+            {
+                error = "Image generation timed out. Try again with a simpler prompt or smaller image."
+            });
+        }
+        catch (Exception ex)
+        {
+            _telemetry.TrackException(ex, new Dictionary<string, string>
+            {
+                ["style"] = style ?? "default",
+                ["deployment"] = deployment
+            });
+            throw;
+        }
+        finally
+        {
+            stopwatch.Stop();
+            _telemetry.TrackDependency(
+                dependencyTypeName: "Azure OpenAI",
+                target: new Uri(endpoint).Host,
+                dependencyName: $"images/edits ({deployment})",
+                data: url,
+                startTime: startTime,
+                duration: stopwatch.Elapsed,
+                resultCode: statusCode.ToString(),
+                success: success);
+        }
     }
 }

@@ -2,6 +2,12 @@
 bin/
 obj/
 *.user
+**/Properties/launchSettings.json
+
+# Build artifacts (publish output, deployment zips)
+publish/
+**/publish/
+*.zip
 
 # Node
 node_modules/
@@ -11,5 +17,11 @@ build/
 .vs/
 .vscode/
 
-# Environment
+# Environment / secrets
 *.env
+.env.local
+.env.development.local
+
+# OS
+.DS_Store
+Thumbs.db
